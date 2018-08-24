@@ -82,6 +82,10 @@
 
 #include <string.h>
 
+#if CONFIG_LWIP_RESTORE_LAST_IP
+#include "nvs_flash.h"
+#endif
+
 /** DHCP_CREATE_RAND_XID: if this is set to 1, the xid is created using
  * LWIP_RAND() (this overrides DHCP_GLOBAL_XID)
  */
@@ -209,6 +213,63 @@ static void dhcp_option_hostname(struct dhcp *dhcp, struct netif *netif);
 #endif /* LWIP_NETIF_HOSTNAME */
 /* always add the DHCP options trailer to end and pad */
 static void dhcp_option_trailer(struct dhcp *dhcp);
+
+
+#if CONFIG_LWIP_RESTORE_LAST_IP
+
+static uint32_t restored_ip_addr;
+
+static void store_dhcp_to_nvs(struct dhcp* dhcp)
+{
+  if(restored_ip_addr != dhcp->offered_ip_addr.addr) {
+    nvs_handle nvs;
+    struct dhcp dhcp_copy;
+    memcpy(&dhcp_copy, dhcp, sizeof(struct dhcp));
+    dhcp_copy.msg_in = NULL;
+
+    if(nvs_open("storage", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_blob(nvs, "dhcp", &dhcp_copy, sizeof(struct dhcp));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+      }
+  }
+}
+
+static esp_err_t restore_dhcp_from_nvs(struct dhcp* dhcp)
+{
+  nvs_handle nvs;
+
+  esp_err_t err = nvs_flash_init();
+  if(err != ESP_OK) {
+    return err;
+  }
+
+  err = nvs_open("storage", NVS_READONLY, &nvs);
+  if(err == ESP_OK) {
+    size_t size = sizeof(struct dhcp);
+    err = nvs_get_blob(nvs, "dhcp", dhcp, &size);
+    if(err == ESP_OK) {
+      restored_ip_addr = dhcp->offered_ip_addr.addr;
+    }
+    nvs_close(nvs);
+  }
+  return err;
+}
+
+
+void erase_dhcp_from_nvs(void)
+{
+  nvs_handle nvs;
+
+  if(nvs_open("storage", NVS_READWRITE, &nvs) == ESP_OK) {
+    nvs_erase_key(nvs, "dhcp");
+    nvs_commit(nvs);
+    nvs_close(nvs);
+  }
+}
+
+#endif
+
 
 /** Ensure DHCP PCB is allocated and bound */
 static err_t
@@ -837,6 +898,16 @@ dhcp_start(struct netif *netif)
   }
 #endif /* LWIP_DHCP_CHECK_LINK_UP */
 
+#if CONFIG_LWIP_RESTORE_LAST_IP
+  // Try to restore last valid ip address obtained from DHCP server.
+  // If no valid ip is available, run dhcp_discover instead.
+  if(restore_dhcp_from_nvs(netif->dhcp) == ESP_OK)
+  {
+    dhcp_set_state(dhcp, DHCP_STATE_BOUND);
+    dhcp_network_changed(netif);
+    return ESP_OK;
+  }
+#endif
 
   /* (re)start the DHCP negotiation */
   result = dhcp_discover(netif);
@@ -1229,6 +1300,9 @@ dhcp_bind(struct netif *netif)
       dhcp->cb();
 #endif
   }
+#if CONFIG_LWIP_RESTORE_LAST_IP
+  store_dhcp_to_nvs(dhcp);
+#endif
   /* Espressif add end. */
 }
 
@@ -1850,9 +1924,15 @@ dhcp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr,
       dhcp_bind(netif);
 #endif
     }
+    else if(dhcp->state == DHCP_STATE_REBOOTING)
+    {
+#if CONFIG_LWIP_RESTORE_LAST_IP
+      dhcp_handle_ack(netif);
+#endif
+      dhcp_bind(netif);
+    }
     /* already bound to the given lease address? */
-    else if ((dhcp->state == DHCP_STATE_REBOOTING) || (dhcp->state == DHCP_STATE_REBINDING) ||
-             (dhcp->state == DHCP_STATE_RENEWING)) {
+    else if ((dhcp->state == DHCP_STATE_REBINDING) || (dhcp->state == DHCP_STATE_RENEWING)) {
       dhcp_bind(netif);
     }
   }

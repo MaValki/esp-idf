@@ -305,6 +305,10 @@ void dhcp_fine_tmr(void);
 extern void dhcp_set_ntp_servers(u8_t num_ntp_servers, const ip4_addr_t* ntp_server_addrs);
 #endif /* LWIP_DHCP_GET_NTP_SRV */
 
+#if CONFIG_LWIP_RESTORE_LAST_IP
+void erase_dhcp_from_nvs(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

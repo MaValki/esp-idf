@@ -1067,6 +1067,11 @@ esp_err_t tcpip_adapter_dhcpc_stop(tcpip_adapter_if_t tcpip_if)
 
     ESP_LOGD(TAG, "dhcp client stop successfully");
     dhcpc_status[tcpip_if] = TCPIP_ADAPTER_DHCP_STOPPED;
+
+#if CONFIG_LWIP_RESTORE_LAST_IP
+    erase_dhcp_from_nvs();
+#endif
+
     return ESP_OK;
 }
 
